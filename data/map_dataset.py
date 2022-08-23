@@ -18,7 +18,7 @@ class MapGenerator:
             x, is_end = self.consume_elem()
             if is_end:
                 break
-            self.queue.append((self.call_actor(self.actors[i % self.num_actors], x), i % self.buffer_size))
+            self.queue.append((self.call_actor(self.actors[i % self.num_actors], x), i % self.num_actors))
     
     def call_actor(self, actor, x):
         if hasattr(actor, 'call'):
