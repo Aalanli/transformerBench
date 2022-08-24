@@ -92,6 +92,11 @@ class RemoteSimpleBatcher:
 
 
 class SingleActorWrapper:
+    """
+    A simple iterator wrapper around a single remote actor, for cases
+    where dataset fetches are faster than model updates, as theoretically
+    only one actor is needed
+    """
     def __init__(self, actor, buffer=2) -> None:
         self.actor = actor
         self.buffer = [self.actor.get.remote() for _ in range(buffer)]
