@@ -63,16 +63,22 @@ class SimpleBatcher:
 
 @ray.remote
 class RemoteSimpleBatcher:
-    def __init__(self, generator_fn, seq_len, batch_size, tokenizer=None, cache_dir=None) -> None:
+    def __init__(self, raw_dataset_fn, mk_generator_fn, seq_len, batch_size, tokenizer=None, cache_dir=None) -> None:
         if tokenizer is None:
             self.tokenizer = AutoTokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
         else:
             self.tokenizer = tokenizer
-        self.generator = generator_fn()
+        self.raw_dataset = raw_dataset_fn()
+        self.iter_fn = mk_generator_fn
+        self.generator = mk_generator_fn(self.raw_dataset)
+
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.elems = batch_size * seq_len
         self.vocab_size = self.tokenizer.vocab_size
+    
+    def reset(self):
+        self.generator = self.iter_fn(self.raw_dataset)
     
     def get(self):
         tokens = []
@@ -91,6 +97,7 @@ class SingleActorWrapper:
         self.buffer = [self.actor.get.remote() for _ in range(buffer)]
     
     def __iter__(self):
+        self.actor.reset.remote()
         return self
 
     def __next__(self):

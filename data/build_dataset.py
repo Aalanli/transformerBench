@@ -3,7 +3,7 @@ from datasets import load_dataset, interleave_datasets
 from data.dataset import SimpleBatcher, RemoteSimpleBatcher, SingleActorWrapper
 
 
-def build_wiki(shuffle=False):
+def build_raw_wiki(shuffle=False):
     data_dir = '/media/allan/A/datasets/Huggingface'
     datasets = data_dir + '/datasets'
 
@@ -13,7 +13,7 @@ def build_wiki(shuffle=False):
     return wikitext
 
 
-def build_bert(shuffle=False):
+def build_raw_bert(shuffle=False):
     data_dir = '/media/allan/A/datasets/Huggingface'
     datasets = data_dir + '/datasets'
 
@@ -30,27 +30,27 @@ def build_bert(shuffle=False):
     return dataset
 
 
-def iter_and_batch(dataset, batch_size=4, seq_len=1024):
-    cache_dir = '/media/allan/A/datasets/Huggingface'
-    dataset = iter(dataset)
-    dataset = map(lambda x: x['text'], dataset)
-    batcher = SimpleBatcher(dataset, seq_len, batch_size, cache_dir=cache_dir)
-    return batcher
-
-
 def iter_and_batch_multiprocess(dataset_builder_fn, batch_size=4, seq_len=1024, buffer_size=2):
     cache_dir = '/media/allan/A/datasets/Huggingface'
-    def dataset_fn():
-        dataset = iter(dataset_builder_fn())
+    def mk_generator_fn(dataset):
+        dataset = iter(dataset)
         dataset = map(lambda x: x['text'], dataset)
         return dataset
     
-    batcher = RemoteSimpleBatcher.remote(dataset_fn, seq_len, batch_size, cache_dir=cache_dir)
+    batcher = RemoteSimpleBatcher.remote(dataset_builder_fn, mk_generator_fn, seq_len, batch_size, cache_dir=cache_dir)
     batcher = SingleActorWrapper(batcher, buffer_size)
     return batcher
 
+
+def build_bert(batch_size=4, seq_len=1024, buffer_size=2):
+    return iter_and_batch_multiprocess(build_raw_bert, batch_size, seq_len, buffer_size)
+
+
+def build_wiki(batch_size=4, seq_len=1024, buffer_size=2):
+    return iter_and_batch_multiprocess(build_raw_wiki, batch_size, seq_len, buffer_size)
+
+
 # %%
 if __name__ == '__main__':
-    dataset = build_bert
-    batcher = iter_and_batch_multiprocess(dataset)
-    print(next(batcher))
+    dataset = build_wiki()
+    print(next(dataset))
