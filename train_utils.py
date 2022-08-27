@@ -112,6 +112,8 @@ def training_loop(
     eval_set=None,
     eval_logger=None,
     run_dir = ".",
+    accumulate_gradient_step=1,
+    grad_clip_norm=0.0,
     mixed_precision=False
 ):
     """
@@ -151,12 +153,22 @@ def training_loop(
         except Exception as e:
             print("unable to load due to:", e)
 
+    exec_steps = 0
     steps = 0
-    steps_since_log = 0
-    steps_since_checkpoint = 0
+    samples_shown = batch_size * accumulate_gradient_step
+    dataset_len = None
+    
+    optimizer.zero_grad()
 
-    for _ in range(epochs):
-        for data in tqdm(train_set):
+    for i in range(epochs):
+        print('epoch number', i+1)
+        if hasattr(train_set, "__len__"):
+            dataset_len = len(dataset_len)
+        elif i == 1:
+            dataset_len = exec_steps
+        
+        for data in tqdm(train_set, total=dataset_len):
+            exec_steps += 1
             gpu_data = recursive_cast(data, lambda x: torch.from_numpy(x).cuda())
             
             x, y = gpu_data
@@ -164,56 +176,58 @@ def training_loop(
                 model.train()
                 pred = model(x)
                 total_loss, loss_dict = criterion(pred, y)
-                assert not torch.isnan(total_loss).any()
+                total_loss_ = total_loss / accumulate_gradient_step
+                assert not torch.isnan(total_loss_).any()
             
-            optimizer.zero_grad()
-            scaler.scale(total_loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            scaler.scale(total_loss_).backward()
+            
+            if exec_steps % accumulate_gradient_step == 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+                scaler.step(optimizer)
+                scaler.update()
+                lr_scheduler.step()
+                optimizer.zero_grad()
 
-            # commence logging and checkpointing operations
-            remove_extra_checkpoints(run_dir, keep=3)
-            
-            steps += batch_size
-            steps_since_log += batch_size
-            steps_since_checkpoint += batch_size
 
-            to_cpu = lambda x: recursive_cast(x, lambda x: x.argmax(-1).cpu().numpy())
-            logger.step.remote(to_cpu(pred), data[1], recursive_cast(loss_dict, lambda x: float(x.detach().cpu())))
+                # commence logging and checkpointing operations
+                remove_extra_checkpoints(run_dir, keep=3)
+                
+                steps += 1
 
-            if eval_set is not None and eval_logger is not None:
-                with torch.no_grad():
-                    model.eval()
-                    with torch.cuda.amp.autocast(mixed_precision):
-                        eval_data = eval_set.get()
-                        gpu_data = recursive_cast(eval_data, lambda x: torch.from_numpy(x).cuda())
-                        x, y = gpu_data
-                        pred = model(x)
-                        # don't compute eval loss for now
-                        eval_logger.step.remote(to_cpu(pred), torch.from_numpy(eval_data[1]), {})
-            
-            
-            rem = steps_since_log // log_scalar_metric_step
-            if rem > 0: # accumulated greater than the log_metric_step threshold
-                logger.log.remote(steps, steps_since_log)
-                wandb.log({}) # dummy log for wandb to log gradients
-                if eval_logger is not None:
-                    eval_logger.log.remote(steps, steps_since_log, prefix='eval')
-                steps_since_log = 0
-            
-            rem = steps_since_checkpoint // checkpoint_step
-            if rem > 0:
-                state_dict = {}
-                state_dict['model'] = model.state_dict()
-                state_dict['optmizer'] = optimizer.state_dict()
-                state_dict['grad_scaler'] = scaler.state_dict()
-                state_dict['criterion'] = criterion.state_dict()
-                state_dict['lr_scheduler'] = lr_scheduler.state_dict()
-                state_dict['steps'] = steps
-                save_checkpoint(state_dict, steps, run_dir)
-                steps_since_checkpoint = 0
+                to_cpu = lambda x: recursive_cast(x, lambda x: x.argmax(-1).cpu().numpy())
+                logger.step.remote(to_cpu(pred), data[1], recursive_cast(loss_dict, lambda x: float(x.detach().cpu())))
 
-        lr_scheduler.step()
+                if eval_set is not None and eval_logger is not None:
+                    with torch.no_grad():
+                        model.eval()
+                        with torch.cuda.amp.autocast(mixed_precision):
+                            eval_data = eval_set.get()
+                            gpu_data = recursive_cast(eval_data, lambda x: torch.from_numpy(x).cuda())
+                            x, y = gpu_data
+                            pred = model(x)
+                            # don't compute eval loss for now
+                            eval_logger.step.remote(to_cpu(pred), torch.from_numpy(eval_data[1]), {})
+                
+                
+                if steps % log_scalar_metric_step == 0: # accumulated greater than the log_metric_step threshold
+                    wandb.log({}) # dummy log for wandb to log gradients
+                    # stretch by samples_shown, to make log invariant to batch_size
+                    # effectively logging sample efficiency as well
+                    logger.log.remote(steps * samples_shown, log_scalar_metric_step)
+                    if eval_logger is not None:
+                        eval_logger.log.remote(steps * samples_shown, log_scalar_metric_step, prefix='eval')
+                
+                if steps % checkpoint_step == 0:
+                    state_dict = {}
+                    state_dict['model'] = model.state_dict()
+                    state_dict['optmizer'] = optimizer.state_dict()
+                    state_dict['grad_scaler'] = scaler.state_dict()
+                    state_dict['criterion'] = criterion.state_dict()
+                    state_dict['lr_scheduler'] = lr_scheduler.state_dict()
+                    state_dict['steps'] = steps
+                    save_checkpoint(state_dict, steps * samples_shown, run_dir)
+
         state_dict = {}
         state_dict['model'] = model.state_dict()
         state_dict['optmizer'] = optimizer.state_dict()
@@ -221,4 +235,4 @@ def training_loop(
         state_dict['criterion'] = criterion.state_dict()
         state_dict['lr_scheduler'] = lr_scheduler.state_dict()
         state_dict['steps'] = steps
-        save_checkpoint(state_dict, steps, run_dir)
+        save_checkpoint(state_dict, steps * samples_shown, run_dir)
