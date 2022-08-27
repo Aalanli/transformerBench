@@ -33,4 +33,16 @@ class InvSqrtScheduler(optim.lr_scheduler._LRScheduler):
         arg1 = 1 / np.sqrt(self.steps)
         arg2 = self.steps * (self.warmup_steps ** -1.5)
         lr_factor = self.const * min(arg1, arg2)
-        return [base_lr * lr_factor for base_lr in self.base_lrs]     
+        return [base_lr * lr_factor for base_lr in self.base_lrs]
+
+
+def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, last_epoch=-1):
+
+    def lr_lambda(current_step: int):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return max(
+            0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps))
+        )
+
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
