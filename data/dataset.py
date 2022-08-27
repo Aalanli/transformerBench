@@ -81,15 +81,17 @@ class RemoteSimpleBatcher:
         self.generator = self.iter_fn(self.raw_dataset)
     
     def get(self):
-        tokens = []
-        while len(tokens) < self.elems:
-            x = self.tokenizer(next(self.generator), truncation=False)['input_ids']
-            tokens.extend(x)
-        tokens = tokens[:self.elems]
-        tokens = np.array(tokens)
-        tokens = tokens.reshape([self.batch_size, self.seq_len])
-        return tokens[:, :-1], tokens[:, 1:]
-
+        try:
+            tokens = []
+            while len(tokens) < self.elems:
+                x = self.tokenizer(next(self.generator), truncation=False)['input_ids']
+                tokens.extend(x)
+            tokens = tokens[:self.elems]
+            tokens = np.array(tokens)
+            tokens = tokens.reshape([self.batch_size, self.seq_len])
+            return tokens[:, :-1], tokens[:, 1:]
+        except StopIteration:
+            return None
 
 class SingleActorWrapper:
     """
@@ -99,14 +101,25 @@ class SingleActorWrapper:
     """
     def __init__(self, actor, buffer=2) -> None:
         self.actor = actor
+        self.buffer_sz = buffer
         self.buffer = [self.actor.get.remote() for _ in range(buffer)]
     
     def __iter__(self):
+        # reset internal generator
         self.actor.reset.remote()
+        # repopulate buffer
+        self.buffer = [self.actor.get.remote() for _ in range(self.buffer_sz)]
         return self
 
     def __next__(self):
         future, self.buffer = ray.wait(self.buffer)
-        self.buffer.append(self.actor.get.remote())
-        return ray.get(future[0])
+        data = ray.get(future[0])
+        # None represents an internal StopIteration
+        if data is None and len(self.buffer) == 0:
+            raise StopIteration
+        elif data is None:
+            return next(self)
+        else:
+            self.buffer.append(self.actor.get.remote())
+        return data
 
