@@ -24,7 +24,7 @@ eval_dataset  = None
 # build model first, since optimizers and lr will need it later
 ###############################################################
 from transformer_baseline.alibi_unified import Criterion, Metrics
-from transformer_baseline.simple_attn import Transformer
+from transformer_baseline.simple_attnv2 import Transformer
 
 m_args = EasyDict()
 
@@ -33,15 +33,15 @@ m_args.embed_dim             = 512
 m_args.n_layers              = 6
 m_args.n_heads               = 8
 m_args.max_sequence          = 1024
-m_args.proj_forward          = 4096
+m_args.proj_forward          = 2048
 m_args.dropout               = 0.1 
 m_args.activation            = 'relu'
 
-# model = Transformer(**m_args)
+model = Transformer(**m_args)
 criterion = Criterion()
 train_metrics = Metrics()
 eval_metrics = None
-from transformers import AutoTokenizer, GPT2LMHeadModel, AutoConfig
+"""from transformers import AutoTokenizer, GPT2LMHeadModel, AutoConfig
 
 config = AutoConfig.from_pretrained(
     "gpt2",
@@ -62,10 +62,11 @@ class Wrapper(torch.nn.Module):
         self.model = model
     def forward(self, x):
         return self.model(x).logits
-model = Wrapper(model)
+model = Wrapper(model)"""
 model_size = sum(t.numel() for t in model.parameters())
 print(f"GPT-2 size: {model_size/1000**2:.1f}M parameters")
-
+for n, p in model.named_parameters():
+    print(n, p.shape)
 
 # %%
 ##################################
@@ -102,11 +103,11 @@ lr_scheduler = lrs.get_linear_schedule_with_warmup(optimizer, 1000, 29416)
 if __name__ == '__main__':
     import os
     from train_utils import training_loop, Logger
-    group_name = 'hf'
-    run_name = '3.0'
+    group_name = 'simple-baseline'
+    run_name = '3.5'
     run_dir = group_name + "-" + run_name
     train_args = EasyDict()
-    train_args.epochs                     = 5
+    train_args.epochs                     = 3
     train_args.run_dir                    = f'experiments/{run_dir}'
     train_args.log_scalar_metric_step     = 70
     train_args.checkpoint_step            = 300

@@ -77,6 +77,8 @@ for n, p in model.named_parameters():
     print(n, p.shape)
 
 # %%
+print([i for i, _ in model.named_parameters()])
+# %%
 import numpy as np
 from transformers import Trainer, TrainingArguments
 from transformers.trainer_callback import TrainerCallback
